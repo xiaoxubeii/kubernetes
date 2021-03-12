@@ -22,6 +22,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -515,6 +516,17 @@ func (m *cgroupManagerImpl) toResources(resourceConfig *ResourceConfig) *libcont
 	}
 	if resourceConfig.Memory != nil {
 		resources.Memory = *resourceConfig.Memory
+	}
+	if libcontainercgroups.IsCgroup2UnifiedMode() {
+		if v, ok := resources.MemoryExtras[MemoryLow]; ok {
+			resources.Unified["memory.low"] = strconv.Itoa(v)
+		}
+		if v, ok := resources.MemoryExtras[MemoryHigh]; ok {
+			resources.Unified["memory.high"] = strconv.Itoa(v)
+		}
+		if v, ok := resources.MemoryExtras[MemoryMin]; ok {
+			resources.Unified["memory.min"] = strconv.Itoa(v)
+		}
 	}
 	if resourceConfig.CpuShares != nil {
 		if libcontainercgroups.IsCgroup2UnifiedMode() {

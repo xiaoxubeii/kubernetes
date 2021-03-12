@@ -18,6 +18,7 @@ package cm
 
 import (
 	"fmt"
+	libcontainercgroups "github.com/opencontainers/runc/libcontainer/cgroups"
 	"strings"
 	"sync"
 	"time"
@@ -191,6 +192,32 @@ func (m *qosContainerManagerImpl) setCPUCgroupConfig(configs map[v1.PodQOSClass]
 	return nil
 }
 
+func (m *qosContainerManagerImpl) setMemoryQoSConfig() []*CgroupConfig {
+	pods := m.activePods()
+	cgs := make([]*CgroupConfig, 0)
+	for i := range pods {
+		pod := pods[i]
+		qosClass := v1qos.GetPodQOS(pod)
+		// if besteffort, we do nothing
+		if qosClass == v1.PodQOSBestEffort {
+			continue
+		}
+
+		cgroupConfig := CgroupConfig{}
+		cgroupConfig.Name = GetPodContainerName(pod)
+		if qosClass == v1.PodQOSGuaranteed {
+			// guranteed container set memory.min = requests.memory
+			cgroupConfig.ResourceParameters.MemoryExtras[MemoryMin] = reqs.Memory()
+		} else if qosClass == v1.PodQOSBurstable {
+			cgroupConfig.ResourceParameters.MemoryExtras[MemoryLow] = reqs.Memory()
+			cgroupConfig.ResourceParameters.MemoryExtras[MemoryHigh] = limits.Memory()
+		}
+		cgs = append(cgs, &cgroupConfig)
+	}
+
+	return cgs
+}
+
 // setMemoryReserve sums the memory limits of all pods in a QOS class,
 // calculates QOS class memory limits, and set those limits in the
 // CgroupConfig for each QOS class.
@@ -291,6 +318,12 @@ func (m *qosContainerManagerImpl) UpdateCgroups() error {
 		return err
 	}
 
+	// update pod level cgroup settings for memory
+	var configs []*CgroupConfig
+	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MemoryQOS && libcontainercgroups.IsCgroup2UnifiedMode() {
+		configs = m.setMemoryQoSConfig()
+	}
+
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.QOSReserved) {
 		for resource, percentReserve := range m.qosReserved {
 			switch resource {
@@ -322,7 +355,9 @@ func (m *qosContainerManagerImpl) UpdateCgroups() error {
 		}
 	}
 
-	for _, config := range qosConfigs {
+	configs = append(configs, qosConfigs[v1.PodQOSGuaranteed], qosConfigs[v1.PodQOSBurstable], qosConfigs[v1.PodQOSBestEffort])
+
+	for _, config := range configs {
 		err := m.cgroupManager.Update(config)
 		if err != nil {
 			klog.Errorf("[ContainerManager]: Failed to update QoS cgroup configuration")
